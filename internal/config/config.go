@@ -19,3 +19,5 @@ func Load() *Config {
 		Environment:  os.Getenv("ENVIRONMENT"),
 	}
 }
+
+
