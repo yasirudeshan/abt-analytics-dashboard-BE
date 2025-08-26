@@ -27,9 +27,16 @@ High-performance Go backend for processing 1M+ records and providing analytics A
 
 ## Quick Start
 
+###Configuration
+```bash
+# Set environment variables in backend root directory as needed (.env)
+PORT=8080
+DATA_FILE_PATH=/path/to/dataset.csv
+ENVIRONMENT=production
+```
+
 ### Development
 ```bash
-#add .env
 # Place your GO_test_5m.csv in the data/ folder
 go run main.go
 ```
