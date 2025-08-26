@@ -47,6 +47,7 @@ go run main.go
 
 The project includes a comprehensive test suite covering all packages and critical functionality.
 
+<img width="972" height="652" alt="image" src="https://github.com/user-attachments/assets/20e82339-2a21-4ec0-9441-8887a1597516" />
 
 #### Running Tests
 
