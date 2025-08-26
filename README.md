@@ -29,27 +29,9 @@ High-performance Go backend for processing 1M+ records and providing analytics A
 
 ### Development
 ```bash
+#add .env
 # Place your GO_test_5m.csv in the data/ folder
 go run main.go
-```
-
-### Production
-```bash
-# Build binary
-go build -o app .
-
-# Run binary
-./app
-
-# Or use Makefile
-make build
-make run
-```
-
-### Docker
-```bash
-make docker
-docker run -p 8080:8080 abt-analytics-dashboard
 ```
 
 ## Testing
@@ -58,20 +40,39 @@ docker run -p 8080:8080 abt-analytics-dashboard
 
 The project includes a comprehensive test suite covering all packages and critical functionality.
 
+
 #### Running Tests
 
 ```bash
-# Run all tests
-make test
+# Run all tests with mockdata
+
+go test ./internal/... -v -run "Test.*WithMockData"
+
+#Run All Tests (including  integration tests)
+
+go test ./... -v
 
 # Run tests with coverage report
-make test-coverage
 
-# Run tests with race detection
-make test-race
+go test -covermode=atomic -coverprofile="coverage.out" ./... -v
 
-# Run benchmarks
-make bench
+# Run Specific Package Tests
+# API unit tests only
+go test ./internal/api -v -run "Test.*WithMockData"
+
+# Processor unit tests only  
+go test ./internal/processor -v -run "Test.*WithMockData"
+
+# Models unit tests only
+go test ./internal/models -v -run "Test.*WithMockData"
+
+# Config unit tests only
+go test ./internal/config -v -run "Test.*WithMockData"
+
+
+#Quick Test Status Check
+
+go test ./... -list=.
 ```
 
 #### Test Scripts
@@ -153,21 +154,7 @@ make docker-build     # Build Docker image
 make docker-run       # Run Docker container
 ```
 
-### Code Quality
 
-```bash
-# Format code
-go fmt ./...
-
-# Vet code
-go vet ./...
-
-# Run linter (if installed)
-golangci-lint run
-
-# Check for security vulnerabilities
-go list -json -m all | nancy sleuth
-```
 
 ## Architecture
 
@@ -200,14 +187,5 @@ go list -json -m all | nancy sleuth
 - **Fast Aggregation**: Optimized sorting and aggregation algorithms
 - **Scalable**: Designed to handle millions of records
 
-## Contributing
 
-1. Ensure tests pass: `make test`
-2. Maintain test coverage above 90%
-3. Follow Go coding standards
-4. Add tests for new functionality
-5. Update documentation as needed
 
-## License
-
-This project is licensed under the MIT License.
