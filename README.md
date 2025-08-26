@@ -27,7 +27,7 @@ High-performance Go backend for processing 1M+ records and providing analytics A
 
 ## Quick Start
 
-###Configuration
+### Configuration
 ```bash
 # Set environment variables in backend root directory as needed (.env)
 PORT=8080
