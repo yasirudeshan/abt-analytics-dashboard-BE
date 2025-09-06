@@ -76,6 +76,28 @@ func (p *Processor) LoadSampleData() {
 		}
 	}
 
+	// Calculate summary for sample data
+	var totalRevenue float64
+	var totalTransactions int
+	countrySet := make(map[string]bool)
+	productSet := make(map[string]bool)
+
+	for _, record := range p.dashboardData.CountryRevenues {
+		totalRevenue += record.TotalRevenue
+		totalTransactions += record.TransactionCount
+		countrySet[record.Country] = true
+		productSet[record.ProductName] = true
+	}
+
+	p.dashboardData.Summary = models.DashboardSummary{
+		TotalRevenue:      totalRevenue,
+		TotalTransactions: totalTransactions,
+		TotalCountries:    len(countrySet),
+		TotalProducts:     len(productSet),
+		TotalRegions:      len(p.dashboardData.TopRegions),
+		TotalMonths:       len(p.dashboardData.MonthlySales),
+	}
+
 	// Set metadata
 	p.dashboardData.LastUpdated = time.Now()
 	p.dashboardData.ProcessingDuration = time.Since(start)

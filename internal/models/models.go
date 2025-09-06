@@ -49,12 +49,23 @@ type RegionRevenue struct {
 	ItemsSold    int     `json:"items_sold"`
 }
 
+// DashboardSummary contains pre-calculated summary statistics
+type DashboardSummary struct {
+	TotalRevenue      float64 `json:"total_revenue"`
+	TotalTransactions int     `json:"total_transactions"`
+	TotalCountries    int     `json:"total_countries"`
+	TotalProducts     int     `json:"total_products"`
+	TotalRegions      int     `json:"total_regions"`
+	TotalMonths       int     `json:"total_months"`
+}
+
 // DashboardData contains all pre-aggregated dashboard data
 type DashboardData struct {
 	CountryRevenues    []CountryRevenue   `json:"country_revenues"`
 	TopProducts        []ProductFrequency `json:"top_products"`
 	MonthlySales       []MonthlySales     `json:"monthly_sales"`
 	TopRegions         []RegionRevenue    `json:"top_regions"`
+	Summary            DashboardSummary   `json:"summary"`
 	LastUpdated        time.Time          `json:"last_updated"`
 	ProcessingDuration time.Duration      `json:"processing_duration"`
 	RecordCount        int                `json:"record_count"`
