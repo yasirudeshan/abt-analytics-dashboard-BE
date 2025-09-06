@@ -20,6 +20,7 @@ import (
 type Processor struct {
 	dashboardData *models.DashboardData
 	mu            sync.RWMutex
+	lastProcessed time.Time
 }
 
 // New creates a new processor instance
@@ -100,9 +101,14 @@ func (p *Processor) ProcessDataset(filePath string) error {
 	p.dashboardData.TopProducts = p.sortTopProducts(productMap, 20)
 	p.dashboardData.MonthlySales = p.sortMonthlySales(monthMap)
 	p.dashboardData.TopRegions = p.sortTopRegions(regionMap, 30)
+
+	// Calculate and cache summary statistics
+	p.dashboardData.Summary = p.calculateSummary(countryMap, productMap, monthMap, regionMap)
+
 	p.dashboardData.LastUpdated = time.Now()
 	p.dashboardData.ProcessingDuration = time.Since(start)
 	p.dashboardData.RecordCount = len(countryMap) // Approximate record count
+	p.lastProcessed = time.Now()
 	p.mu.Unlock()
 
 	log.Printf("Data processing completed in %v", time.Since(start))
@@ -256,16 +262,21 @@ func (p *Processor) aggregateWorker(
 	monthMap map[string]*models.MonthlySales,
 	regionMap map[string]*models.RegionRevenue,
 ) {
-	for transaction := range transactionCh {
-		mu.Lock()
+	// Create local maps for each worker to avoid mutex contention
+	localCountryMap := make(map[string]*models.CountryRevenue)
+	localProductMap := make(map[string]*models.ProductFrequency)
+	localMonthMap := make(map[string]*models.MonthlySales)
+	localRegionMap := make(map[string]*models.RegionRevenue)
 
+	// Process transactions locally without locks
+	for transaction := range transactionCh {
 		// Aggregate country revenue
 		countryKey := fmt.Sprintf("%s-%s", transaction.Country, transaction.ProductName)
-		if countryRev, exists := countryMap[countryKey]; exists {
+		if countryRev, exists := localCountryMap[countryKey]; exists {
 			countryRev.TotalRevenue += transaction.TotalPrice
 			countryRev.TransactionCount++
 		} else {
-			countryMap[countryKey] = &models.CountryRevenue{
+			localCountryMap[countryKey] = &models.CountryRevenue{
 				Country:          transaction.Country,
 				ProductName:      transaction.ProductName,
 				TotalRevenue:     transaction.TotalPrice,
@@ -274,13 +285,13 @@ func (p *Processor) aggregateWorker(
 		}
 
 		// Aggregate product frequency
-		if product, exists := productMap[transaction.ProductName]; exists {
+		if product, exists := localProductMap[transaction.ProductName]; exists {
 			product.PurchaseCount++
 			if transaction.StockQuantity > 0 {
 				product.CurrentStock = transaction.StockQuantity // Keep latest stock value
 			}
 		} else {
-			productMap[transaction.ProductName] = &models.ProductFrequency{
+			localProductMap[transaction.ProductName] = &models.ProductFrequency{
 				ProductName:   transaction.ProductName,
 				PurchaseCount: 1,
 				CurrentStock:  transaction.StockQuantity,
@@ -289,11 +300,11 @@ func (p *Processor) aggregateWorker(
 
 		// Aggregate monthly sales (use transaction_date)
 		monthKey := fmt.Sprintf("%d-%02d", transaction.TransactionDate.Year(), transaction.TransactionDate.Month())
-		if monthlySales, exists := monthMap[monthKey]; exists {
+		if monthlySales, exists := localMonthMap[monthKey]; exists {
 			monthlySales.TotalSales += transaction.TotalPrice
 			monthlySales.SalesVolume += transaction.Quantity
 		} else {
-			monthMap[monthKey] = &models.MonthlySales{
+			localMonthMap[monthKey] = &models.MonthlySales{
 				Month:       transaction.TransactionDate.Format("January"),
 				Year:        transaction.TransactionDate.Year(),
 				TotalSales:  transaction.TotalPrice,
@@ -302,18 +313,62 @@ func (p *Processor) aggregateWorker(
 		}
 
 		// Aggregate region revenue
-		if region, exists := regionMap[transaction.Region]; exists {
+		if region, exists := localRegionMap[transaction.Region]; exists {
 			region.TotalRevenue += transaction.TotalPrice
 			region.ItemsSold += transaction.Quantity
 		} else {
-			regionMap[transaction.Region] = &models.RegionRevenue{
+			localRegionMap[transaction.Region] = &models.RegionRevenue{
 				Region:       transaction.Region,
 				TotalRevenue: transaction.TotalPrice,
 				ItemsSold:    transaction.Quantity,
 			}
 		}
+	}
 
-		mu.Unlock()
+	// Merge local results into global maps (single lock per worker)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Merge country revenues
+	for key, localRev := range localCountryMap {
+		if globalRev, exists := countryMap[key]; exists {
+			globalRev.TotalRevenue += localRev.TotalRevenue
+			globalRev.TransactionCount += localRev.TransactionCount
+		} else {
+			countryMap[key] = localRev
+		}
+	}
+
+	// Merge product frequencies
+	for key, localProd := range localProductMap {
+		if globalProd, exists := productMap[key]; exists {
+			globalProd.PurchaseCount += localProd.PurchaseCount
+			if localProd.CurrentStock > globalProd.CurrentStock {
+				globalProd.CurrentStock = localProd.CurrentStock
+			}
+		} else {
+			productMap[key] = localProd
+		}
+	}
+
+	// Merge monthly sales
+	for key, localMonth := range localMonthMap {
+		if globalMonth, exists := monthMap[key]; exists {
+			globalMonth.TotalSales += localMonth.TotalSales
+			globalMonth.SalesVolume += localMonth.SalesVolume
+		} else {
+			monthMap[key] = localMonth
+		}
+	}
+
+	// Merge region revenues
+	for key, localRegion := range localRegionMap {
+		if globalRegion, exists := regionMap[key]; exists {
+			globalRegion.TotalRevenue += localRegion.TotalRevenue
+			globalRegion.ItemsSold += localRegion.ItemsSold
+		} else {
+			regionMap[key] = localRegion
+		}
 	}
 }
 
@@ -381,6 +436,36 @@ func (p *Processor) sortTopRegions(regionMap map[string]*models.RegionRevenue, l
 	return regions
 }
 
+// calculateSummary calculates summary statistics from the aggregation maps
+func (p *Processor) calculateSummary(
+	countryMap map[string]*models.CountryRevenue,
+	productMap map[string]*models.ProductFrequency,
+	monthMap map[string]*models.MonthlySales,
+	regionMap map[string]*models.RegionRevenue,
+) models.DashboardSummary {
+	var totalRevenue float64
+	var totalTransactions int
+	countrySet := make(map[string]bool)
+	productSet := make(map[string]bool)
+
+	// Calculate totals from country revenues
+	for _, record := range countryMap {
+		totalRevenue += record.TotalRevenue
+		totalTransactions += record.TransactionCount
+		countrySet[record.Country] = true
+		productSet[record.ProductName] = true
+	}
+
+	return models.DashboardSummary{
+		TotalRevenue:      totalRevenue,
+		TotalTransactions: totalTransactions,
+		TotalCountries:    len(countrySet),
+		TotalProducts:     len(productSet),
+		TotalRegions:      len(regionMap),
+		TotalMonths:       len(monthMap),
+	}
+}
+
 // GetDashboardData returns the current dashboard data (thread-safe)
 func (p *Processor) GetDashboardData() *models.DashboardData {
 	p.mu.RLock()
@@ -393,6 +478,58 @@ func (p *Processor) GetCountryRevenues() []models.CountryRevenue {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.dashboardData.CountryRevenues
+}
+
+// GetCountryRevenuesPaginated returns paginated country revenue data
+func (p *Processor) GetCountryRevenuesPaginated(page, limit int) ([]models.CountryRevenue, int, int) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	allRevenues := p.dashboardData.CountryRevenues
+	totalCount := len(allRevenues)
+
+	// Calculate pagination
+	start := page * limit
+	end := start + limit
+
+	if start >= totalCount {
+		return []models.CountryRevenue{}, totalCount, 0
+	}
+
+	if end > totalCount {
+		end = totalCount
+	}
+
+	return allRevenues[start:end], totalCount, (totalCount + limit - 1) / limit // total pages
+}
+
+// IsDataFresh checks if the processed data is fresh (less than 5 minutes old)
+func (p *Processor) IsDataFresh() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return time.Since(p.lastProcessed) < 5*time.Minute
+}
+
+// GetDashboardSummary returns complete summary statistics from the dataset
+func (p *Processor) GetDashboardSummary() map[string]interface{} {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	// Use pre-calculated cached values for instant response
+	summary := p.dashboardData.Summary
+
+	return map[string]interface{}{
+		"total_revenue":      summary.TotalRevenue,
+		"total_transactions": summary.TotalTransactions,
+		"total_countries":    summary.TotalCountries,
+		"total_products":     summary.TotalProducts,
+		"total_records":      p.dashboardData.RecordCount,
+		"unique_products":    len(p.dashboardData.TopProducts),
+		"unique_regions":     summary.TotalRegions,
+		"months_covered":     summary.TotalMonths,
+		"last_updated":       p.dashboardData.LastUpdated,
+		"processing_time":    p.dashboardData.ProcessingDuration.String(),
+	}
 }
 
 // GetTopProducts returns top products data
